@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 
 // 숫자 없는 트렌드 데이터 생성
@@ -101,6 +101,7 @@ export default function FamilyDashboard({
   const [elapsedHours, setElapsedHours] = useState(0);
   const [hoveredEvent, setHoveredEvent] = useState<number | null>(null);
   const [hoveredTrend, setHoveredTrend] = useState<string | null>(null);
+  const patientScrollRef = useRef(false);
 
   useEffect(() => {
     let isActive = true;
@@ -205,6 +206,15 @@ export default function FamilyDashboard({
       isActive = false;
       clearInterval(interval);
     };
+  }, [selectedPatientId]);
+
+  useEffect(() => {
+    if (!selectedPatientId) return;
+    if (!patientScrollRef.current) {
+      patientScrollRef.current = true;
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [selectedPatientId]);
 
   const selectedPatient =

@@ -65,19 +65,29 @@ class ModelBundle:
 
 if nn is not None:
     class KStepGRU(nn.Module):
-        def __init__(self, input_dim: int, hidden_dim: int, num_layers: int, k_steps: int) -> None:
+        def __init__(
+            self,
+            input_dim: int,
+            hidden_dim: int,
+            num_layers: int,
+            k_steps: int,
+            dropout: float = 0.0,
+        ) -> None:
             super().__init__()
             self.gru = nn.GRU(
                 input_size=input_dim,
                 hidden_size=hidden_dim,
                 num_layers=num_layers,
                 batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
             )
+            self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
             self.head = nn.Linear(hidden_dim, k_steps)
 
         def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-            output, _ = self.gru(x)
-            last_hidden = output[:, -1, :]
+            _, h = self.gru(x)
+            last_hidden = h[-1]
+            last_hidden = self.dropout(last_hidden)
             return self.head(last_hidden)
 else:
     class KStepGRU:
@@ -109,11 +119,14 @@ def load_model_bundle(artifacts_dir: Optional[Path] = None) -> ModelBundle:
     if not state_path.exists():
         return ModelBundle(model=None, device=device, meta=meta, use_fallback=True)
 
+    num_layers = int(meta.get("num_layers", meta.get("n_layers", 1)))
+    dropout = float(meta.get("dropout", 0.0))
     model = KStepGRU(
         input_dim=len(feature_cols),
         hidden_dim=int(meta.get("hidden", 64)),
-        num_layers=int(meta.get("num_layers", 1)),
+        num_layers=num_layers,
         k_steps=int(meta.get("K", 120)),
+        dropout=dropout,
     )
     state = torch.load(state_path, map_location=device)
     if isinstance(state, dict) and "state_dict" in state:
@@ -137,8 +150,7 @@ def infer_hazard_sequence(bundle: ModelBundle, sequence: Sequence[Sequence[float
     if raw.numel() == 0:
         return fallback_hazard_sequence(sequence, k_steps, bundle.meta.get("FEATURE_COLS"))
 
-    if raw.min().item() < 0 or raw.max().item() > 1:
-        raw = torch.sigmoid(raw)
+    raw = torch.sigmoid(raw)
     hazard = raw.clamp(0.0, 1.0).tolist()
 
     if len(hazard) < k_steps:
@@ -158,13 +170,13 @@ def fallback_hazard_sequence(
     last = sequence[-1] if sequence else [0.0 for _ in cols]
     severity = _severity_score(cols, last)
 
-    base = 0.01 + 0.08 * severity
-    drift = (severity - 0.45) * 0.015
+    base = 0.003 + 0.008 * severity
+    drift = (severity - 0.45) * 0.004
     hazard_seq = []
     for idx in range(k_steps):
-        wave = 0.01 * math.sin(idx / 6.5 + severity * 2.4)
+        wave = 0.003 * math.sin(idx / 6.5 + severity * 2.4)
         value = base + drift * (idx / max(k_steps - 1, 1)) + wave
-        hazard_seq.append(_clamp(value, 0.001, 0.25))
+        hazard_seq.append(_clamp(value, 0.001, 0.03))
     return hazard_seq
 
 

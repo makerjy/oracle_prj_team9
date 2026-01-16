@@ -117,6 +117,8 @@ type KStepSimState = {
   severity: number;
   drift: number;
   timestamp: Date;
+  minSeverity: number;
+  maxSeverity: number;
 };
 
 const WARDS = [
@@ -647,6 +649,7 @@ export default function MedicalStaffDashboard({
   const [kStepTimeline, setKStepTimeline] = useState<KStepTimelineResponse | null>(null);
   const [isKStepAvailable, setIsKStepAvailable] = useState<boolean>(false);
   const kStepSimRef = useRef<Record<string, KStepSimState>>({});
+  const patientScrollRef = useRef(false);
   const syntheticCacheRef = useRef<Map<string, { vitals: Patient['vitals']; status: Patient['status'] }>>(
     new Map()
   );
@@ -729,12 +732,17 @@ export default function MedicalStaffDashboard({
     patientsForKStep.forEach((patient, index) => {
       if (kStepSimRef.current[patient.id]) return;
       const rng = createRng(hashString(patient.id));
-      const severity = clamp(0.12 + rng() * 0.6, 0.05, 0.85);
-      const drift = (rng() - 0.5) * 0.03;
+      const isHighRisk = patient.id.endsWith('0999') || patient.id.endsWith('0201');
+      const minSeverity = isHighRisk ? 0.55 : 0.08;
+      const maxSeverity = isHighRisk ? 0.9 : 0.55;
+      const severity = clamp(minSeverity + rng() * (maxSeverity - minSeverity), minSeverity, maxSeverity);
+      const drift = isHighRisk ? 0.008 + rng() * 0.004 : (rng() - 0.5) * 0.01;
       kStepSimRef.current[patient.id] = {
         severity,
         drift,
         timestamp: new Date(now.getTime() - (index + 1) * 3600 * 1000),
+        minSeverity,
+        maxSeverity,
       };
     });
   }, [patientsForKStep]);
@@ -749,15 +757,17 @@ export default function MedicalStaffDashboard({
             const state = kStepSimRef.current[patient.id];
             if (!state) return;
             const nextSeverity = clamp(
-              state.severity + state.drift + (Math.random() - 0.5) * 0.02,
-              0.05,
-              0.9
+              state.severity + state.drift + (Math.random() - 0.5) * 0.015,
+              state.minSeverity,
+              state.maxSeverity
             );
             const nextTimestamp = new Date(state.timestamp.getTime() + 3600 * 1000);
             kStepSimRef.current[patient.id] = {
               severity: nextSeverity,
               drift: state.drift,
               timestamp: nextTimestamp,
+              minSeverity: state.minSeverity,
+              maxSeverity: state.maxSeverity,
             };
 
             await inferKStepRisk({
@@ -822,6 +832,15 @@ export default function MedicalStaffDashboard({
       isActive = false;
       clearInterval(interval);
     };
+  }, [selectedPatientId]);
+
+  useEffect(() => {
+    if (!selectedPatientId) return;
+    if (!patientScrollRef.current) {
+      patientScrollRef.current = true;
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [selectedPatientId]);
 
   useEffect(() => {
