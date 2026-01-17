@@ -1,0 +1,167 @@
+{
+  "feature_cols": [
+    "HeartRate_std_6h",
+    "GCS_Verbal",
+    "SpO2_measured",
+    "RespRate_std_6h",
+    "SysBP",
+    "GCS_Motor",
+    "GCS_Total_mean_6h",
+    "Temp_std_6h",
+    "pH",
+    "DiasBP_mean_6h",
+    "MeanBP",
+    "FiO2"
+  ],
+  "impute_stats": {
+    "HeartRate_std_6h": 3.1676522108446092,
+    "GCS_Verbal": 4.099035577154241,
+    "SpO2_measured": 0.4961645871950224,
+    "RespRate_std_6h": 1.7272794777819478,
+    "SysBP": 120.96403071742252,
+    "GCS_Motor": 5.660115920205789,
+    "GCS_Total_mean_6h": 13.39001848103057,
+    "Temp_std_6h": 0.07877360291463292,
+    "pH": 7.383695137624606,
+    "DiasBP_mean_6h": 63.83877257427175,
+    "MeanBP": 78.27322817149604,
+    "FiO2": 48.61304962611647
+  },
+  "standardize_stats": {
+    "HeartRate_std_6h": {
+      "mean": 3.1676522108446092,
+      "std": 4.525908953637713
+    },
+    "GCS_Verbal": {
+      "mean": 4.099035577154241,
+      "std": 1.4982027193298375
+    },
+    "SpO2_measured": {
+      "mean": 0.4961645871950224,
+      "std": 0.4999852893922135
+    },
+    "RespRate_std_6h": {
+      "mean": 1.7272794777819478,
+      "std": 2.1793304236892266
+    },
+    "SysBP": {
+      "mean": 120.96403071742252,
+      "std": 21.000629330948968
+    },
+    "GCS_Motor": {
+      "mean": 5.660115920205789,
+      "std": 1.040346900388159
+    },
+    "GCS_Total_mean_6h": {
+      "mean": 13.39001848103057,
+      "std": 2.888668287691135
+    },
+    "Temp_std_6h": {
+      "mean": 0.07877360291463292,
+      "std": 0.1466813363002173
+    },
+    "pH": {
+      "mean": 7.383695137624606,
+      "std": 0.05040798783888691
+    },
+    "DiasBP_mean_6h": {
+      "mean": 63.83877257427175,
+      "std": 13.823694041224485
+    },
+    "MeanBP": {
+      "mean": 78.27322817149604,
+      "std": 15.068159971608335
+    },
+    "FiO2": {
+      "mean": 48.61304962611647,
+      "std": 13.556290795271204
+    }
+  },
+  "config": {
+    "data": {
+      "data_dir": "/Users/ijaeyong/projects/grd_kstep/data",
+      "train_file": "train_processed.parquet",
+      "valid_file": "valid_processed.parquet",
+      "test_file": "test_processed.parquet",
+      "id_col": "stay_id",
+      "time_col": "t",
+      "event_col": "event",
+      "label_col": "_future_label",
+      "label_observable_col": "_label_observable",
+      "horizon_hours": 24,
+      "drop_after_event": true,
+      "apply_cutoff_to_train": false,
+      "cutoff_hours": 24,
+      "agg_mode": "max",
+      "target_recall": 0.8,
+      "use_precomputed_labels": true,
+      "recompute_labels": false,
+      "feature_cols": [
+        "HeartRate_std_6h",
+        "GCS_Verbal",
+        "SpO2_measured",
+        "RespRate_std_6h",
+        "SysBP",
+        "GCS_Motor",
+        "GCS_Total_mean_6h",
+        "Temp_std_6h",
+        "pH",
+        "DiasBP_mean_6h",
+        "MeanBP",
+        "FiO2"
+      ]
+    },
+    "sequence": {
+      "max_len": 120,
+      "pad_value": -999.0
+    },
+    "model": {
+      "hidden": 64,
+      "dropout": 0.2,
+      "n_layers": 1
+    },
+    "train": {
+      "max_epochs": 50,
+      "patience": 5,
+      "min_delta": 0.0001,
+      "lr": 0.001,
+      "weight_decay": 0.0001,
+      "batch_train_cuda": 128,
+      "batch_train_cpu": 64,
+      "batch_eval_cuda": 256,
+      "batch_eval_cpu": 128,
+      "grad_clip": 5.0
+    },
+    "output": {
+      "artifacts_dir": "artifacts",
+      "output_dir": "output"
+    }
+  },
+  "best_epoch": 6,
+  "best_valid_loss": 0.5636455261369506,
+  "pos_weight": 303.5874014427109,
+  "row_metrics_valid": {
+    "auc": 0.9479228696933707,
+    "ap": 0.1625144177835692
+  },
+  "row_metrics_test": {
+    "auc": 0.9453400468315255,
+    "ap": 0.18080535542635484
+  },
+  "stay_metrics_valid": {
+    "auc": 0.8986646016548975,
+    "ap": 0.3590887044206575,
+    "threshold": 0.9084515571594238,
+    "precision": 0.12717882504841835,
+    "recall": 0.8008130081300813,
+    "f1": 0.21949860724233985
+  },
+  "stay_metrics_test": {
+    "auc": 0.8796667412580422,
+    "ap": 0.39166246525593995,
+    "threshold": 0.9084515571594238,
+    "precision": 0.13946280991735538,
+    "recall": 0.7670454545454546,
+    "f1": 0.23601398601398602
+  }
+}

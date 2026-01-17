@@ -20,8 +20,13 @@ MAX_ALERTS = 120
 
 MODEL_BUNDLE: ModelBundle = load_model_bundle()
 FEATURE_ORDER = MODEL_BUNDLE.meta.get("FEATURE_COLS", FEATURE_COLS)
-SEQ_LEN = int(MODEL_BUNDLE.meta.get("L", 24))
-BUFFER = SequenceBuffer(FEATURE_ORDER, SEQ_LEN, MODEL_BUNDLE.meta.get("impute_stats", {}))
+SEQ_LEN = int(MODEL_BUNDLE.meta.get("sequence_len", MODEL_BUNDLE.meta.get("L", 24)))
+BUFFER = SequenceBuffer(
+    FEATURE_ORDER,
+    SEQ_LEN,
+    MODEL_BUNDLE.meta.get("impute_stats", {}),
+    pad_value=MODEL_BUNDLE.meta.get("pad_value", 0.0),
+)
 
 STATE_LOCK = threading.Lock()
 BUFFER_LOCK = threading.Lock()
@@ -86,8 +91,8 @@ def infer(request: InferRequest) -> InferResponse:
         raise HTTPException(status_code=400, detail="patient_id is required")
 
     with BUFFER_LOCK:
-        sequence = BUFFER.add(request.patient_id, request.features)
-    hazard_seq = infer_hazard_sequence(MODEL_BUNDLE, sequence)
+        sequence, length = BUFFER.add(request.patient_id, request.features)
+    hazard_seq = infer_hazard_sequence(MODEL_BUNDLE, sequence, length)
 
     risk_6h = compute_window_risk(hazard_seq, 6)
     risk_24h = compute_window_risk(hazard_seq, 24)
