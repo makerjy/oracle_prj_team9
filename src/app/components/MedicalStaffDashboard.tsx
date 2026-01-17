@@ -121,6 +121,40 @@ type KStepSimState = {
   maxSeverity: number;
 };
 
+type RiskTrend = 'improve' | 'stable' | 'worsen' | 'volatile';
+
+type RiskShock = {
+  t: number;
+  magnitude: number;
+  decay: number;
+};
+
+type RiskProfile = {
+  base: number;
+  trend: number;
+  volatility: number;
+  pulse: number;
+  shocks: RiskShock[];
+};
+
+type PatientBases = {
+  heartRate: number;
+  sysBP: number;
+  meanBP: number;
+  respRate: number;
+  spo2: number;
+  wbc: number;
+  creatinine: number;
+  lactate: number;
+  ph: number;
+  glucose: number;
+  gcsTotal: number;
+  gcsEye: number;
+  gcsVerbal: number;
+  gcsMotor: number;
+  pupil: number;
+};
+
 const WARDS = [
   'Intensive Care Unit (ICU)',
   'Medical Intensive Care Unit (MICU)',
@@ -194,12 +228,19 @@ const generateVitalSeries = (base: number, variance: number, rng: () => number) 
   return data;
 };
 
-const generateRiskSeries = (base: number, rng: () => number, currentTime: number) => {
+const generateRiskSeries = (profile: RiskProfile, rng: () => number, currentTime: number) => {
   const data: Array<{ t: number; hazard: number; cumRisk: number }> = [];
   let survival = 1;
   for (let i = 0; i <= currentTime; i += 1) {
-    const drift = Math.sin(i / 10) * 0.01 + (rng() - 0.5) * 0.008;
-    const hazard = clamp(base + drift, 0.005, 0.12);
+    const progress = currentTime > 0 ? i / currentTime : 0;
+    const wave =
+      Math.sin(i / 7) * profile.pulse + Math.sin(i / 19 + rng() * 1.8) * profile.pulse * 0.6;
+    const noise = (rng() - 0.5) * profile.volatility;
+    const shock = profile.shocks.reduce((sum, item) => {
+      if (i < item.t) return sum;
+      return sum + item.magnitude * Math.exp(-(i - item.t) / item.decay);
+    }, 0);
+    const hazard = clamp(profile.base + profile.trend * progress + wave + noise + shock, 0.003, 0.18);
     survival *= Math.max(0, 1 - hazard);
     data.push({
       t: i,
@@ -212,7 +253,7 @@ const generateRiskSeries = (base: number, rng: () => number, currentTime: number
 
 const getLatestValue = (data: VitalSeriesPoint[]) => data[data.length - 1]?.value ?? 0;
 
-const buildSyntheticBases = (seed: number) => {
+const buildSyntheticBases = (seed: number): PatientBases => {
   const rng = createRng(seed);
   return {
     heartRate: 78 + rng() * 28,
@@ -230,6 +271,59 @@ const buildSyntheticBases = (seed: number) => {
     gcsVerbal: 3 + rng() * 2,
     gcsMotor: 4 + rng() * 2,
     pupil: 2.6 + rng() * 1.0,
+  };
+};
+
+const buildRiskProfile = (
+  seed: number,
+  bases: PatientBases,
+  trend: RiskTrend = 'stable'
+): RiskProfile => {
+  const rng = createRng(seed + 131);
+  const base = clamp(
+    0.008 +
+      bases.lactate * 0.008 +
+      Math.max(0, bases.wbc - 7) * 0.0012 +
+      Math.max(0, bases.creatinine - 1) * 0.004,
+    0.008,
+    0.09
+  );
+
+  let trendValue = (rng() - 0.5) * 0.01;
+  let volatility = 0.012;
+  let pulse = 0.006;
+
+  if (trend === 'worsen') {
+    trendValue = 0.025 + rng() * 0.02;
+    volatility = 0.017;
+    pulse = 0.01;
+  } else if (trend === 'improve') {
+    trendValue = -(0.02 + rng() * 0.015);
+    volatility = 0.009;
+    pulse = 0.005;
+  } else if (trend === 'volatile') {
+    trendValue = (rng() - 0.5) * 0.02;
+    volatility = 0.022;
+    pulse = 0.013;
+  }
+
+  const shocks: RiskShock[] = [];
+  const shockCount = trend === 'volatile' ? 3 : 2;
+  for (let i = 0; i < shockCount; i += 1) {
+    const t = Math.round(12 + rng() * 80);
+    const polarity =
+      trend === 'improve' ? -1 : trend === 'volatile' ? (rng() > 0.5 ? 1 : -1) : 1;
+    const magnitude = polarity * (0.01 + rng() * 0.02);
+    const decay = 6 + rng() * 10;
+    shocks.push({ t, magnitude, decay });
+  }
+
+  return {
+    base,
+    trend: trendValue,
+    volatility,
+    pulse,
+    shocks,
   };
 };
 
@@ -264,25 +358,14 @@ const formatPercent = (value?: number, digits = 1) =>
     ? `${(value * 100).toFixed(digits)}%`
     : '--';
 
-const createPatient = (seed: number, profile: Omit<Patient, 'riskSummary' | 'riskSeries' | 'vitals' | 'status'> & {
-  bases: {
-    heartRate: number;
-    sysBP: number;
-    meanBP: number;
-    respRate: number;
-    spo2: number;
-    wbc: number;
-    creatinine: number;
-    lactate: number;
-    ph: number;
-    glucose: number;
-    gcsTotal: number;
-    gcsEye: number;
-    gcsVerbal: number;
-    gcsMotor: number;
-    pupil: number;
-  };
-}) => {
+const createPatient = (
+  seed: number,
+  profile: Omit<Patient, 'riskSummary' | 'riskSeries' | 'vitals' | 'status'> & {
+    bases: PatientBases;
+    riskTrend?: RiskTrend;
+    riskProfile?: RiskProfile;
+  }
+) => {
   const rng = createRng(seed);
 
   const vital = [
@@ -337,7 +420,9 @@ const createPatient = (seed: number, profile: Omit<Patient, 'riskSummary' | 'ris
   });
 
   const currentTime = Math.min(profile.elapsedHours, MAX_TIME);
-  const riskSeries = generateRiskSeries(profile.bases.lactate * 0.02, rng, currentTime);
+  const riskProfile =
+    profile.riskProfile ?? buildRiskProfile(seed, profile.bases, profile.riskTrend);
+  const riskSeries = generateRiskSeries(riskProfile, rng, currentTime);
   const recentWindow = riskSeries.slice(-6);
   const recentHazards = recentWindow.map((point) => point.hazard);
   const currentHazard = recentHazards[recentHazards.length - 1] ?? 0;
@@ -385,10 +470,11 @@ const createPatient = (seed: number, profile: Omit<Patient, 'riskSummary' | 'ris
 };
 
 const buildDemoData = () => {
+  const wardIdFor = (index: number) => `ward-icu-${index + 1}`;
   const patients: Patient[] = [
     createPatient(42, {
       id: 'pt-0142',
-      wardId: 'ward-icu-1',
+      wardId: wardIdFor(0),
       wardName: WARDS[0],
       name: '김OO',
       gender: '남',
@@ -398,6 +484,7 @@ const buildDemoData = () => {
       room: '3-2',
       elapsedHours: 42,
       diagnosis: '패혈증 및 호흡부전',
+      riskTrend: 'worsen',
       bases: {
         heartRate: 94,
         sysBP: 110,
@@ -418,7 +505,7 @@ const buildDemoData = () => {
     }),
     createPatient(77, {
       id: 'pt-0177',
-      wardId: 'ward-icu-2',
+      wardId: wardIdFor(1),
       wardName: WARDS[1],
       name: '박OO',
       gender: '여',
@@ -428,6 +515,7 @@ const buildDemoData = () => {
       room: '3-5',
       elapsedHours: 55,
       diagnosis: '폐렴 및 급성호흡곤란',
+      riskTrend: 'worsen',
       bases: {
         heartRate: 88,
         sysBP: 116,
@@ -448,7 +536,7 @@ const buildDemoData = () => {
     }),
     createPatient(93, {
       id: 'pt-0093',
-      wardId: 'ward-icu-3',
+      wardId: wardIdFor(2),
       wardName: WARDS[2],
       name: '이OO',
       gender: '남',
@@ -458,6 +546,7 @@ const buildDemoData = () => {
       room: '4-1',
       elapsedHours: 67,
       diagnosis: '심부전 및 신기능 저하',
+      riskTrend: 'stable',
       bases: {
         heartRate: 104,
         sysBP: 104,
@@ -478,7 +567,7 @@ const buildDemoData = () => {
     }),
     createPatient(120, {
       id: 'pt-0201',
-      wardId: 'ward-icu-4',
+      wardId: wardIdFor(3),
       wardName: WARDS[3],
       name: '최OO',
       gender: '여',
@@ -488,6 +577,7 @@ const buildDemoData = () => {
       room: '4-3',
       elapsedHours: 81,
       diagnosis: '다발성 장기부전',
+      riskTrend: 'volatile',
       bases: {
         heartRate: 98,
         sysBP: 92,
@@ -506,30 +596,261 @@ const buildDemoData = () => {
         pupil: 3.6,
       },
     }),
+    createPatient(228, {
+      id: 'pt-0228',
+      wardId: wardIdFor(4),
+      wardName: WARDS[4],
+      name: '정OO',
+      gender: '남',
+      age: 64,
+      weight: 66,
+      admitDate: '2026-01-10',
+      room: '5-1',
+      elapsedHours: 36,
+      diagnosis: '복부 수술 후 패혈증 의심',
+      riskTrend: 'improve',
+      bases: {
+        heartRate: 86,
+        sysBP: 118,
+        meanBP: 83,
+        respRate: 18,
+        spo2: 97,
+        wbc: 11.4,
+        creatinine: 1.1,
+        lactate: 1.9,
+        ph: 7.38,
+        glucose: 132,
+        gcsTotal: 13,
+        gcsEye: 4,
+        gcsVerbal: 4,
+        gcsMotor: 5,
+        pupil: 2.6,
+      },
+    }),
+    createPatient(304, {
+      id: 'pt-0304',
+      wardId: wardIdFor(5),
+      wardName: WARDS[5],
+      name: '윤OO',
+      gender: '여',
+      age: 52,
+      weight: 60,
+      admitDate: '2026-01-09',
+      room: '6-4',
+      elapsedHours: 24,
+      diagnosis: '외상성 출혈 후 회복 중',
+      riskTrend: 'improve',
+      bases: {
+        heartRate: 102,
+        sysBP: 98,
+        meanBP: 72,
+        respRate: 20,
+        spo2: 95,
+        wbc: 9.2,
+        creatinine: 0.9,
+        lactate: 2.2,
+        ph: 7.36,
+        glucose: 140,
+        gcsTotal: 12,
+        gcsEye: 4,
+        gcsVerbal: 3,
+        gcsMotor: 5,
+        pupil: 3.1,
+      },
+    }),
+    createPatient(419, {
+      id: 'pt-0419',
+      wardId: wardIdFor(6),
+      wardName: WARDS[6],
+      name: '서OO',
+      gender: '남',
+      age: 71,
+      weight: 72,
+      admitDate: '2026-01-08',
+      room: '7-2',
+      elapsedHours: 48,
+      diagnosis: '급성 관상동맥 증후군',
+      riskTrend: 'stable',
+      bases: {
+        heartRate: 90,
+        sysBP: 122,
+        meanBP: 85,
+        respRate: 16,
+        spo2: 98,
+        wbc: 8.7,
+        creatinine: 1.0,
+        lactate: 1.6,
+        ph: 7.4,
+        glucose: 128,
+        gcsTotal: 14,
+        gcsEye: 4,
+        gcsVerbal: 5,
+        gcsMotor: 5,
+        pupil: 2.4,
+      },
+    }),
+    createPatient(520, {
+      id: 'pt-0520',
+      wardId: wardIdFor(7),
+      wardName: WARDS[7],
+      name: '한OO',
+      gender: '여',
+      age: 47,
+      weight: 54,
+      admitDate: '2026-01-07',
+      room: '8-3',
+      elapsedHours: 30,
+      diagnosis: '신경외과 수술 후 모니터링',
+      riskTrend: 'stable',
+      bases: {
+        heartRate: 78,
+        sysBP: 114,
+        meanBP: 80,
+        respRate: 17,
+        spo2: 99,
+        wbc: 7.9,
+        creatinine: 0.8,
+        lactate: 1.3,
+        ph: 7.42,
+        glucose: 118,
+        gcsTotal: 15,
+        gcsEye: 4,
+        gcsVerbal: 5,
+        gcsMotor: 6,
+        pupil: 2.2,
+      },
+    }),
+    createPatient(601, {
+      id: 'pt-0601',
+      wardId: wardIdFor(0),
+      wardName: WARDS[0],
+      name: '강OO',
+      gender: '남',
+      age: 58,
+      weight: 68,
+      admitDate: '2026-01-16',
+      room: '3-7',
+      elapsedHours: 12,
+      diagnosis: '응급 수술 후 즉시 입실',
+      riskTrend: 'volatile',
+      bases: {
+        heartRate: 88,
+        sysBP: 124,
+        meanBP: 86,
+        respRate: 18,
+        spo2: 98,
+        wbc: 9.5,
+        creatinine: 1.0,
+        lactate: 1.6,
+        ph: 7.4,
+        glucose: 126,
+        gcsTotal: 14,
+        gcsEye: 4,
+        gcsVerbal: 5,
+        gcsMotor: 5,
+        pupil: 2.6,
+      },
+    }),
+    createPatient(712, {
+      id: 'pt-0712',
+      wardId: wardIdFor(6),
+      wardName: WARDS[6],
+      name: '오OO',
+      gender: '여',
+      age: 62,
+      weight: 57,
+      admitDate: '2026-01-15',
+      room: '7-5',
+      elapsedHours: 8,
+      diagnosis: '관상동맥 중재술 후 경과 관찰',
+      riskTrend: 'improve',
+      bases: {
+        heartRate: 72,
+        sysBP: 128,
+        meanBP: 90,
+        respRate: 16,
+        spo2: 99,
+        wbc: 6.2,
+        creatinine: 0.7,
+        lactate: 1.1,
+        ph: 7.41,
+        glucose: 110,
+        gcsTotal: 15,
+        gcsEye: 4,
+        gcsVerbal: 5,
+        gcsMotor: 6,
+        pupil: 2.1,
+      },
+    }),
+    createPatient(818, {
+      id: 'pt-0818',
+      wardId: wardIdFor(1),
+      wardName: WARDS[1],
+      name: '장OO',
+      gender: '남',
+      age: 49,
+      weight: 75,
+      admitDate: '2026-01-15',
+      room: '2-4',
+      elapsedHours: 12,
+      diagnosis: '폐렴 호전 후 관찰',
+      riskTrend: 'improve',
+      bases: {
+        heartRate: 76,
+        sysBP: 120,
+        meanBP: 88,
+        respRate: 17,
+        spo2: 98,
+        wbc: 7.0,
+        creatinine: 0.8,
+        lactate: 1.2,
+        ph: 7.39,
+        glucose: 114,
+        gcsTotal: 15,
+        gcsEye: 4,
+        gcsVerbal: 5,
+        gcsMotor: 6,
+        pupil: 2.3,
+      },
+    }),
+    createPatient(999, {
+      id: 'pt-0999',
+      wardId: wardIdFor(0),
+      wardName: WARDS[0],
+      name: '류OO',
+      gender: '남',
+      age: 81,
+      weight: 59,
+      admitDate: '2026-01-16',
+      room: '1-1',
+      elapsedHours: 6,
+      diagnosis: '패혈성 쇼크 의심',
+      riskTrend: 'worsen',
+      bases: {
+        heartRate: 122,
+        sysBP: 86,
+        meanBP: 55,
+        respRate: 30,
+        spo2: 88,
+        wbc: 19.8,
+        creatinine: 3.2,
+        lactate: 5.4,
+        ph: 7.18,
+        glucose: 210,
+        gcsTotal: 7,
+        gcsEye: 2,
+        gcsVerbal: 2,
+        gcsMotor: 3,
+        pupil: 4.0,
+      },
+    }),
   ];
 
-  const wards: Ward[] = [
-    {
-      id: 'ward-icu-1',
-      name: WARDS[0],
-      patients: patients.filter((patient) => patient.wardId === 'ward-icu-1'),
-    },
-    {
-      id: 'ward-icu-2',
-      name: WARDS[1],
-      patients: patients.filter((patient) => patient.wardId === 'ward-icu-2'),
-    },
-    {
-      id: 'ward-icu-3',
-      name: WARDS[2],
-      patients: patients.filter((patient) => patient.wardId === 'ward-icu-3'),
-    },
-    {
-      id: 'ward-icu-4',
-      name: WARDS[3],
-      patients: patients.filter((patient) => patient.wardId === 'ward-icu-4'),
-    },
-  ];
+  const wards: Ward[] = WARDS.map((name, index) => ({
+    id: wardIdFor(index),
+    name,
+    patients: patients.filter((patient) => patient.wardId === wardIdFor(index)),
+  }));
 
   return wards;
 };
